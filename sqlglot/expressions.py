@@ -1901,12 +1901,12 @@ class Insert(DDL, DML):
         copy: bool = True,
         **opts,
     ) -> DML:
-        if not self.expressions:
+        if not self.this:
             return self
 
         return _apply_builder(
             expression=expression,
-            instance=self.expressions[0],
+            instance=self.this,
             arg="returning",
             prefix="RETURNING",
             dialect=dialect,
