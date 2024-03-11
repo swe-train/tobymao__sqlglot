@@ -1212,7 +1212,7 @@ class DML(Expression):
             opts: other options to use to parse the input expressions.
 
         Returns:
-            Delete: the modified expression.
+            The modified DML expression.
         """
         return _apply_builder(
             expression=expression,
@@ -1865,22 +1865,55 @@ class Index(Expression):
     }
 
 
-class Insert(DDL, DML):
+class InsertLogging(Expression):
+    arg_types = {"this": False, "expression": False, "limit": False}
+
+
+class InsertAction(Expression):
     arg_types = {
-        "hint": False,
-        "with": False,
         "this": True,
-        "expression": False,
-        "conflict": False,
-        "returning": False,
+        "partition": False,
         "overwrite": False,
         "exists": False,
-        "partition": False,
-        "alternative": False,
+        "by_name": False,
+        "expression": False,
+        "returning": False,
+        "logging": False,
+    }
+
+
+class Insert(DDL, DML):
+    arg_types = {
+        "this": True,
+        "hint": False,
+        "with": False,
+        "expression": False,
+        "conflict": False,
         "where": False,
         "ignore": False,
-        "by_name": False,
+        "first": False,
     }
+
+    def returning(
+        self,
+        expression: ExpOrStr,
+        dialect: DialectType = None,
+        copy: bool = True,
+        **opts,
+    ) -> DML:
+        if not self.expressions:
+            return self
+
+        return _apply_builder(
+            expression=expression,
+            instance=self.expressions[0],
+            arg="returning",
+            prefix="RETURNING",
+            dialect=dialect,
+            copy=copy,
+            into=Returning,
+            **opts,
+        )
 
     def with_(
         self,
@@ -4642,7 +4675,7 @@ class NthValue(AggFunc):
 
 
 class Case(Func):
-    arg_types = {"this": False, "ifs": True, "default": False}
+    arg_types = {"this": False, "ifs": True, "default": False, "no_delimiters": False}
 
     def when(self, condition: ExpOrStr, then: ExpOrStr, copy: bool = True, **opts) -> Case:
         instance = maybe_copy(self, copy)
@@ -6261,7 +6294,7 @@ def insert(
     if columns:
         this = Schema(this=this, expressions=[to_identifier(c, copy=copy) for c in columns])
 
-    insert = Insert(this=this, expression=expr, overwrite=overwrite)
+    insert = Insert(this=InsertAction(this=this, expression=expr, overwrite=overwrite))
 
     if returning:
         insert = t.cast(Insert, insert.returning(returning, dialect=dialect, copy=False, **opts))

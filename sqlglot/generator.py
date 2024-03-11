@@ -1483,39 +1483,49 @@ class Generator(metaclass=_Generator):
 
         return f"{sql})"
 
+    def insertlogging_sql(self, expression: exp.InsertLogging) -> str:
+        this = self.sql(expression, "this")
+        this = f" INTO {this}" if this else ""
+        expr = self.sql(expression, "expression")
+        expr = f" ({expr})" if expr else ""
+        limit = self.sql(expression, "limit")
+        limit = f" REJECT LIMIT {limit}" if limit else ""
+        return f"LOG ERRORS{this}{expr}{limit}"
+
+    def insertaction_sql(self, expression: exp.InsertAction) -> str:
+        this = self.sql(expression, "this")
+        this = f"{self.INSERT_OVERWRITE if expression.args.get('overwrite') else 'INTO'} {this}"
+        partition = self.sql(expression, "partition")
+        partition = f" {partition}" if partition else ""
+        by_name = " BY NAME" if expression.args.get("by_name") else ""
+        exists = " IF EXISTS" if expression.args.get("exists") else ""
+        returning = self.sql(expression, "returning")
+        expr = self.sql(expression, "expression")
+        expr = f"{self.sep()}{expr}" if expr else ""
+        expr = f"{expr}{returning}" if self.RETURNING_END else f"{returning}{expr}"
+        logging = self.sql(expression, "logging")
+        logging = f" {logging}" if logging else ""
+        return f"{this}{by_name}{exists}{partition}{expr}{logging}"
+
     def insert_sql(self, expression: exp.Insert) -> str:
         hint = self.sql(expression, "hint")
-        overwrite = expression.args.get("overwrite")
-
-        if isinstance(expression.this, exp.Directory):
-            this = " OVERWRITE" if overwrite else " INTO"
-        else:
-            this = self.INSERT_OVERWRITE if overwrite else " INTO"
-
-        alternative = expression.args.get("alternative")
-        alternative = f" OR {alternative}" if alternative else ""
+        first = " FIRST" if expression.args.get("first") else ""
         ignore = " IGNORE" if expression.args.get("ignore") else ""
-
-        this = f"{this} {self.sql(expression, 'this')}"
-
-        exists = " IF EXISTS" if expression.args.get("exists") else ""
-        partition_sql = (
-            f" {self.sql(expression, 'partition')}" if expression.args.get("partition") else ""
-        )
+        this = f" {self.sql(expression, 'this')}"
+        expr = self.sql(expression, "expression")
+        expr = f"{self.sep()}{expr}" if expr else ""
         where = self.sql(expression, "where")
         where = f"{self.sep()}REPLACE WHERE {where}" if where else ""
-        expression_sql = f"{self.sep()}{self.sql(expression, 'expression')}"
-        on_conflict = self.sql(expression, "conflict")
-        on_conflict = f" {on_conflict}" if on_conflict else ""
-        by_name = " BY NAME" if expression.args.get("by_name") else ""
-        returning = self.sql(expression, "returning")
 
-        if self.RETURNING_END:
-            expression_sql = f"{expression_sql}{on_conflict}{returning}"
-        else:
-            expression_sql = f"{returning}{expression_sql}{on_conflict}"
+        conflict = self.sql(expression, "conflict")
+        if conflict:
+            if isinstance(expression.args["conflict"], exp.OnConflict):
+                conflict = f" {conflict}"
+            else:
+                hint = f"{hint} OR {conflict}"
+                conflict = ""
 
-        sql = f"INSERT{hint}{alternative}{ignore}{this}{by_name}{exists}{partition_sql}{where}{expression_sql}"
+        sql = f"INSERT{hint}{first}{ignore}{this}{conflict}{where}{expr}"
         return self.prepend_ctes(expression, sql)
 
     def intersect_sql(self, expression: exp.Intersect) -> str:
@@ -2423,6 +2433,9 @@ class Generator(metaclass=_Generator):
             statements.append(f"ELSE {default}")
 
         statements.append("END")
+
+        if expression.args.get("no_delimiters"):
+            statements = statements[1:-1]
 
         if self.pretty and self.text_width(statements) > self.max_text_width:
             return self.indent("\n".join(statements), skip_first=True, skip_last=True)

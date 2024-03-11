@@ -201,10 +201,6 @@ class TestDuckDB(Validator):
             },
         )
 
-        self.validate_identity("INSERT INTO x BY NAME SELECT 1 AS y")
-        self.validate_identity("SELECT 1 AS x UNION ALL BY NAME SELECT 2 AS x")
-        self.validate_identity("SELECT SUM(x) FILTER (x = 1)", "SELECT SUM(x) FILTER(WHERE x = 1)")
-
         # https://github.com/duckdb/duckdb/releases/tag/v0.8.0
         self.assertEqual(
             parse_one("a / b", read="duckdb").assert_is(exp.Div).sql(dialect="duckdb"), "a / b"
@@ -213,6 +209,8 @@ class TestDuckDB(Validator):
             parse_one("a // b", read="duckdb").assert_is(exp.IntDiv).sql(dialect="duckdb"), "a // b"
         )
 
+        self.validate_identity("SELECT 1 AS x UNION ALL BY NAME SELECT 2 AS x")
+        self.validate_identity("SELECT SUM(x) FILTER (x = 1)", "SELECT SUM(x) FILTER(WHERE x = 1)")
         self.validate_identity("SELECT df1.*, df2.* FROM df1 POSITIONAL JOIN df2")
         self.validate_identity("MAKE_TIMESTAMP(1992, 9, 20, 13, 34, 27.123456)")
         self.validate_identity("MAKE_TIMESTAMP(1667810584123456)")
@@ -240,8 +238,13 @@ class TestDuckDB(Validator):
         self.validate_identity("FROM tbl", "SELECT * FROM tbl")
         self.validate_identity("x -> '$.family'")
         self.validate_identity("CREATE TABLE color (name ENUM('RED', 'GREEN', 'BLUE'))")
+        self.validate_identity("INSERT INTO x BY NAME SELECT 1 AS y")
         self.validate_identity(
             "SELECT * FROM x LEFT JOIN UNNEST(y)", "SELECT * FROM x LEFT JOIN UNNEST(y) ON TRUE"
+        )
+        self.validate_identity(
+            "INSERT INTO x BY POSITION SELECT 1 AS y",
+            "INSERT INTO x SELECT 1 AS y",
         )
         self.validate_identity(
             """SELECT '{"foo": [1, 2, 3]}' -> 'foo' -> 0""",

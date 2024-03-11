@@ -1003,8 +1003,6 @@ class Parser(metaclass=_Parser):
 
     USABLES: OPTIONS_TYPE = dict.fromkeys(("ROLE", "WAREHOUSE", "DATABASE", "SCHEMA"), tuple())
 
-    INSERT_ALTERNATIVES = {"ABORT", "FAIL", "IGNORE", "REPLACE", "ROLLBACK"}
-
     CLONE_KEYWORDS = {"CLONE", "COPY"}
     HISTORICAL_DATA_KIND = {"TIMESTAMP", "OFFSET", "STATEMENT", "STREAM"}
 
@@ -2130,11 +2128,34 @@ class Parser(metaclass=_Parser):
     def _parse_insert(self) -> exp.Insert:
         comments = ensure_list(self._prev_comments)
         hint = self._parse_hint()
-        overwrite = self._match(TokenType.OVERWRITE)
+        conflict = self._match(TokenType.OR) and self._parse_var_from_options(self.CONFLICT_ACTIONS)
+        first = self._match_texts(("ALL", "FIRST")) and self._prev.text.upper() == "FIRST"
         ignore = self._match(TokenType.IGNORE)
-        local = self._match_text_seq("LOCAL")
-        alternative = None
+        this = self._parse_insert_action() or self._parse_case(
+            parser=self._parse_insert_action, match_end=False
+        )
 
+        return self.expression(
+            exp.Insert,
+            comments=comments + ensure_list(this and this.comments),
+            hint=hint,
+            this=this,
+            where=self._match_pair(TokenType.REPLACE, TokenType.WHERE)
+            and self._parse_conjunction(),
+            expression=self._parse_ddl_select(),
+            conflict=conflict or self._parse_on_conflict(),
+            ignore=ignore,
+            first=first,
+        )
+
+    def _parse_insert_action(self) -> t.Optional[exp.InsertAction]:
+        if not self._match_set((TokenType.OVERWRITE, TokenType.INTO)):
+            return None
+
+        comments = ensure_list(self._prev_comments)
+        overwrite = self._prev.token_type == TokenType.OVERWRITE
+
+        local = self._match_text_seq("LOCAL")
         if self._match_text_seq("DIRECTORY"):
             this: t.Optional[exp.Expression] = self.expression(
                 exp.Directory,
@@ -2142,34 +2163,47 @@ class Parser(metaclass=_Parser):
                 local=local,
                 row_format=self._parse_row_format(match_row=True),
             )
+            partition: t.Optional[exp.Expression] = None
         else:
-            if self._match(TokenType.OR):
-                alternative = self._match_texts(self.INSERT_ALTERNATIVES) and self._prev.text
-
-            self._match(TokenType.INTO)
-            comments += ensure_list(self._prev_comments)
             self._match(TokenType.TABLE)
             this = self._parse_table(schema=True)
+            partition = self._parse_partition()
 
-        returning = self._parse_returning()
-
+        self._match_text_seq("BY", "POSITION")
         return self.expression(
-            exp.Insert,
+            exp.InsertAction,
             comments=comments,
-            hint=hint,
             this=this,
+            partition=partition,
+            overwrite=overwrite,
             by_name=self._match_text_seq("BY", "NAME"),
             exists=self._parse_exists(),
-            partition=self._parse_partition(),
-            where=self._match_pair(TokenType.REPLACE, TokenType.WHERE)
-            and self._parse_conjunction(),
-            expression=self._parse_derived_table_values() or self._parse_ddl_select(),
-            conflict=self._parse_on_conflict(),
-            returning=returning or self._parse_returning(),
-            overwrite=overwrite,
-            alternative=alternative,
-            ignore=ignore,
+            expression=self._parse_derived_table_values(table_alias=None),
+            returning=self._parse_returning(),
+            logging=self._parse_insert_logging(),
         )
+
+    def _parse_insert_logging(self) -> t.Optional[exp.InsertLogging]:
+        if not self._match_text_seq("LOG", "ERRORS"):
+            return None
+
+        if self._match(TokenType.INTO):
+            this = self._parse_table_parts(schema=True)
+        else:
+            this = None
+
+        if self._match(TokenType.L_PAREN):
+            expression = self._parse_conjunction()
+            self._match_r_paren()
+        else:
+            expression = None
+
+        if self._match_text_seq("REJECT", "LIMIT"):
+            limit = self._parse_number() or self._parse_var_from_options({"UNLIMITED": tuple()})
+        else:
+            limit = None
+
+        return self.expression(exp.InsertLogging, this=this, expression=expression, limit=limit)
 
     def _parse_kill(self) -> exp.Kill:
         kind = exp.var(self._prev.text) if self._match_texts(("CONNECTION", "QUERY")) else None
@@ -2218,7 +2252,7 @@ class Parser(metaclass=_Parser):
             return None
         return self.expression(
             exp.Returning,
-            expressions=self._parse_csv(self._parse_expression),
+            expressions=self._parse_csv(self._parse_conjunction),
             into=self._match(TokenType.INTO) and self._parse_table_part(),
         )
 
@@ -3121,19 +3155,23 @@ class Parser(metaclass=_Parser):
 
         return self.expression(exp.Unnest, expressions=expressions, alias=alias, offset=offset)
 
-    def _parse_derived_table_values(self) -> t.Optional[exp.Values]:
+    def _parse_derived_table_values(
+        self, table_alias: t.Optional[bool] = True
+    ) -> t.Optional[exp.Values]:
         is_derived = self._match_pair(TokenType.L_PAREN, TokenType.VALUES)
         if not is_derived and not self._match_text_seq("VALUES"):
             return None
 
         expressions = self._parse_csv(self._parse_value)
-        alias = self._parse_table_alias()
+        alias = table_alias and self._parse_table_alias()
 
         if is_derived:
             self._match_r_paren()
 
         return self.expression(
-            exp.Values, expressions=expressions, alias=alias or self._parse_table_alias()
+            exp.Values,
+            expressions=expressions,
+            alias=table_alias and (alias or self._parse_table_alias()),
         )
 
     def _parse_table_sample(self, as_modifier: bool = False) -> t.Optional[exp.TableSample]:
@@ -4706,30 +4744,40 @@ class Parser(metaclass=_Parser):
             return self.expression(exp.Slice, this=this, expression=self._parse_conjunction())
         return this
 
-    def _parse_case(self) -> t.Optional[exp.Expression]:
+    def _parse_case(
+        self, parser: t.Optional[t.Callable] = None, match_end: bool = True
+    ) -> t.Optional[exp.Expression]:
         ifs = []
         default = None
 
         comments = self._prev_comments
         expression = self._parse_conjunction()
+        parser = parser or self._parse_conjunction
 
         while self._match(TokenType.WHEN):
             this = self._parse_conjunction()
             self._match(TokenType.THEN)
-            then = self._parse_conjunction()
+            then = parser()
             ifs.append(self.expression(exp.If, this=this, true=then))
 
         if self._match(TokenType.ELSE):
-            default = self._parse_conjunction()
+            default = parser()
 
-        if not self._match(TokenType.END):
+        if match_end and not self._match(TokenType.END):
             if isinstance(default, exp.Interval) and default.this.sql().upper() == "END":
                 default = exp.column("interval")
             else:
                 self.raise_error("Expected END after CASE", self._prev)
 
         return self._parse_window(
-            self.expression(exp.Case, comments=comments, this=expression, ifs=ifs, default=default)
+            self.expression(
+                exp.Case,
+                comments=comments,
+                this=expression,
+                ifs=ifs,
+                default=default,
+                no_delimiters=not match_end,
+            )
         )
 
     def _parse_if(self) -> t.Optional[exp.Expression]:
