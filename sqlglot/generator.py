@@ -1483,15 +1483,6 @@ class Generator(metaclass=_Generator):
 
         return f"{sql})"
 
-    def insertlogging_sql(self, expression: exp.InsertLogging) -> str:
-        this = self.sql(expression, "this")
-        this = f" INTO {this}" if this else ""
-        expr = self.sql(expression, "expression")
-        expr = f" ({expr})" if expr else ""
-        limit = self.sql(expression, "limit")
-        limit = f" REJECT LIMIT {limit}" if limit else ""
-        return f"LOG ERRORS{this}{expr}{limit}"
-
     def insertaction_sql(self, expression: exp.InsertAction) -> str:
         this = self.sql(expression, "this")
         this = f"{self.INSERT_OVERWRITE if expression.args.get('overwrite') else 'INTO'} {this}"
@@ -1499,13 +1490,9 @@ class Generator(metaclass=_Generator):
         partition = f" {partition}" if partition else ""
         by_name = " BY NAME" if expression.args.get("by_name") else ""
         exists = " IF EXISTS" if expression.args.get("exists") else ""
-        returning = self.sql(expression, "returning")
         expr = self.sql(expression, "expression")
         expr = f"{self.sep()}{expr}" if expr else ""
-        expr = f"{expr}{returning}" if self.RETURNING_END else f"{returning}{expr}"
-        logging = self.sql(expression, "logging")
-        logging = f" {logging}" if logging else ""
-        return f"{this}{by_name}{exists}{partition}{expr}{logging}"
+        return f"{this}{by_name}{exists}{partition}{expr}"
 
     def insert_sql(self, expression: exp.Insert) -> str:
         hint = self.sql(expression, "hint")
@@ -1516,6 +1503,8 @@ class Generator(metaclass=_Generator):
         expr = f"{self.sep()}{expr}" if expr else ""
         where = self.sql(expression, "where")
         where = f"{self.sep()}REPLACE WHERE {where}" if where else ""
+        returning = self.sql(expression, "returning")
+        expr = f"{expr}{returning}" if self.RETURNING_END else f"{returning}{expr}"
 
         conflict = self.sql(expression, "conflict")
         if conflict:

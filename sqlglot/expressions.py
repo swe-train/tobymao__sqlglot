@@ -1865,10 +1865,6 @@ class Index(Expression):
     }
 
 
-class InsertLogging(Expression):
-    arg_types = {"this": False, "expression": False, "limit": False}
-
-
 class InsertAction(Expression):
     arg_types = {
         "this": True,
@@ -1877,7 +1873,6 @@ class InsertAction(Expression):
         "exists": False,
         "by_name": False,
         "expression": False,
-        "returning": False,
         "logging": False,
     }
 
@@ -1892,28 +1887,8 @@ class Insert(DDL, DML):
         "where": False,
         "ignore": False,
         "first": False,
+        "returning": False,
     }
-
-    def returning(
-        self,
-        expression: ExpOrStr,
-        dialect: DialectType = None,
-        copy: bool = True,
-        **opts,
-    ) -> DML:
-        if not self.this:
-            return self
-
-        return _apply_builder(
-            expression=expression,
-            instance=self.this,
-            arg="returning",
-            prefix="RETURNING",
-            dialect=dialect,
-            copy=copy,
-            into=Returning,
-            **opts,
-        )
 
     def with_(
         self,

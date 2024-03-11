@@ -45,7 +45,6 @@ class TestOracle(Validator):
         self.validate_identity("SELECT COUNT(*) * 10 FROM orders SAMPLE (10) SEED (1)")
         self.validate_identity("SELECT * FROM V$SESSION")
         self.validate_identity("SELECT TO_CHAR(-100, 'L99', 'NL_CURRENCY = '' AusDollars '' ')")
-        self.validate_identity("INSERT INTO t (c) VALUES (1) RETURNING c + 1 LOG ERRORS INTO err")
         self.validate_identity(
             "SELECT last_name, employee_id, manager_id, LEVEL FROM employees START WITH employee_id = 100 CONNECT BY PRIOR employee_id = manager_id ORDER SIBLINGS BY last_name"
         )
@@ -98,9 +97,9 @@ class TestOracle(Validator):
         )
         self.validate_identity(
             "INSERT FIRST "
-            "WHEN col1 = 'trg1' THEN INTO trg_tb1 (id) VALUES (id) LOG ERRORS "
-            "WHEN col2 = 'trg2' THEN INTO trg_tb2 (id) VALUES (id) LOG ERRORS INTO s.t ('tag') REJECT LIMIT 10 "
-            "WHEN col3 = 'trg3' THEN INTO trg_tb3 (id) VALUES (id) LOG ERRORS REJECT LIMIT UNLIMITED "
+            "WHEN col1 = 'trg1' THEN INTO trg_tb1 (id, col1, col2, col3) VALUES (id, col1, '*n.a.*', '*n.a.*')"
+            "WHEN col2 = 'trg2' THEN INTO trg_tb2 (id, col1, col2, col3) VALUES (id, '*n.a.*', col2, '*n.a.*')"
+            "WHEN col3 = 'trg3' THEN INTO trg_tb3 (id, col1, col2, col3) VALUES (id, '*n.a.*', '*n.a.*', col3)"
             "SELECT id FROM src_tbl"
         )
 

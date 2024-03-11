@@ -2146,6 +2146,7 @@ class Parser(metaclass=_Parser):
             conflict=conflict or self._parse_on_conflict(),
             ignore=ignore,
             first=first,
+            returning=self._parse_returning(),
         )
 
     def _parse_insert_action(self) -> t.Optional[exp.InsertAction]:
@@ -2179,31 +2180,7 @@ class Parser(metaclass=_Parser):
             by_name=self._match_text_seq("BY", "NAME"),
             exists=self._parse_exists(),
             expression=self._parse_derived_table_values(table_alias=None),
-            returning=self._parse_returning(),
-            logging=self._parse_insert_logging(),
         )
-
-    def _parse_insert_logging(self) -> t.Optional[exp.InsertLogging]:
-        if not self._match_text_seq("LOG", "ERRORS"):
-            return None
-
-        if self._match(TokenType.INTO):
-            this = self._parse_table_parts(schema=True)
-        else:
-            this = None
-
-        if self._match(TokenType.L_PAREN):
-            expression = self._parse_conjunction()
-            self._match_r_paren()
-        else:
-            expression = None
-
-        if self._match_text_seq("REJECT", "LIMIT"):
-            limit = self._parse_number() or self._parse_var_from_options({"UNLIMITED": tuple()})
-        else:
-            limit = None
-
-        return self.expression(exp.InsertLogging, this=this, expression=expression, limit=limit)
 
     def _parse_kill(self) -> exp.Kill:
         kind = exp.var(self._prev.text) if self._match_texts(("CONNECTION", "QUERY")) else None
