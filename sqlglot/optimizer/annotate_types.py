@@ -627,6 +627,7 @@ class TypeAnnotator(metaclass=_TypeAnnotator):
 
     def _annotate_struct(self, expression: exp.Struct) -> exp.Struct:
         self._annotate_args(expression)
+
         self._set_type(
             expression,
             exp.DataType(

@@ -6,7 +6,7 @@ import typing as t
 from sqlglot import alias, exp
 from sqlglot.dialects.dialect import Dialect, DialectType
 from sqlglot.errors import OptimizeError
-from sqlglot.helper import seq_get, SingleValuedMapping
+from sqlglot.helper import seq_get, SingleValuedMapping, name_sequence
 from sqlglot.optimizer.annotate_types import TypeAnnotator
 from sqlglot.optimizer.scope import Scope, build_scope, traverse_scope, walk_in_scope
 from sqlglot.optimizer.simplify import simplify_parens
@@ -70,7 +70,7 @@ def qualify_columns(
 
         if not isinstance(scope.expression, exp.UDTF):
             if expand_stars:
-                _expand_stars(scope, resolver, using_column_tables, pseudocolumns)
+                _expand_stars(scope, resolver, using_column_tables, pseudocolumns, annotator)
             qualify_outputs(scope)
 
         _expand_group_by(scope)
@@ -385,6 +385,7 @@ def _expand_stars(
     resolver: Resolver,
     using_column_tables: t.Dict[str, t.Any],
     pseudocolumns: t.Set[str],
+    annotator,
 ) -> None:
     """Expand stars to lists of column selections"""
 
@@ -427,11 +428,53 @@ def _expand_stars(
             continue
 
         for table in tables:
-            if table not in scope.sources:
+            db = expression.args.get("db")
+            db = db.this if db else None
+            generate_alias = False
+            if table not in scope.sources and db not in scope.sources:
                 raise OptimizeError(f"Unknown table: {table}")
+            elif table not in scope.sources and db in scope.sources and expression.is_star:
+                # [BigQuery] Expand foo.bar.* where bar is a struct col
+                columns = []
+                annotator.annotate_scope(scope)
+                stack = [(col, "") for col in scope.columns if col.is_type(exp.DataType.Type.STRUCT)]
+                while stack:
+                    col, name = stack.pop()
+                    next_alias_name = name_sequence("_field_")
 
-            columns = resolver.get_source_columns(table, only_visible=True)
-            columns = columns or scope.outer_columns
+                    if not isinstance(col.this, exp.Identifier):
+                        print(f"Unaliased nested struct, cant process it")
+                        columns = []
+                        break
+
+                    name = col.this.this if not name else  f"{name}.{col.this.this}"
+
+                    datatype = col.find(exp.DataType) or col.type.find(exp.DataType)
+
+                    coldef_list = []
+                    nested_structs = []
+
+                    for expr in datatype.expressions:
+                        if isinstance(expr, exp.DataType) and expr.this == exp.DataType.Type.STRUCT:
+                            nested_structs.append(expr)
+                        elif isinstance(expr, exp.ColumnDef) and expr.kind.this == exp.DataType.Type.STRUCT:
+                            nested_structs.append(expr)
+                        else:
+                            coldef_list.append(expr)
+                    for child_col in coldef_list:
+                        child_col_name = child_col.this.this if isinstance(child_col.this, exp.Identifier) else next_alias_name()
+                        columns.append(f"{name}.{child_col_name}")
+
+                    for nested_struct in nested_structs:
+                        annotator._maybe_annotate(nested_struct)
+                        stack.append((nested_struct, name))
+
+                generate_alias = True
+                table = db
+                db = None
+            else:
+                columns = resolver.get_source_columns(table, only_visible=True)
+                columns = columns or scope.outer_columns
 
             if pseudocolumns:
                 columns = [name for name in columns if name.upper() not in pseudocolumns]
@@ -474,7 +517,12 @@ def _expand_stars(
                     )
                 else:
                     alias_ = replace_columns.get(table_id, {}).get(name, name)
-                    column = exp.column(name, table=table)
+                    if generate_alias:
+                        name = exp.Identifier(this=name)
+                        alias_ = next_alias_name()
+
+                    column = exp.column(name, table=table, db=db)
+
                     new_selections.append(
                         alias(column, alias_, copy=False) if alias_ != name else column
                     )
